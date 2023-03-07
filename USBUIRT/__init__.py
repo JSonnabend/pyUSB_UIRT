@@ -33,6 +33,7 @@ from ctypes import (
 )
 import datetime
 import threading
+import pydevd
 
 
 INVALID_HANDLE_VALUE = -1
@@ -71,7 +72,14 @@ LEARNCALLBACKPROC = WINFUNCTYPE(c_int, c_uint, c_uint, c_ulong, c_void_p)
 
 
 class USB_UIRT():
-    text = 'Text'
+    receiveCallback = None
+
+    @property
+    def onReceive(self):
+        return self.receiveCallback
+    @onReceive.setter
+    def onReceive(self, callback):
+        self.receiveCallback = callback
 
     def __init__(self):
         self.dll = None
@@ -92,21 +100,21 @@ class USB_UIRT():
         self.args = (ledRX, ledTX, legacyRX, repeatStopCodes)
         self.codeFormat = UUIRTDRV_IRFMT_PRONTO
         try:
-            dll = WinDLL('uuirtdrv')
+            self.dll = WinDLL('uuirtdrv')
         except:
-            raise self.Exceptions.DriverNotFound
+            raise Exception("DriverNotFound")
         puDrvVersion = c_uint(0)
-        if not dll.UUIRTGetDrvInfo(byref(puDrvVersion)):
-            raise self.Exception("Unable to retrieve uuirtdrv version!")
+        if not self.dll.UUIRTGetDrvInfo(byref(puDrvVersion)):
+            raise Exception("Unable to retrieve uuirtdrv version!")
         if puDrvVersion.value != 0x0100:
-            raise self.Exception("Invalid uuirtdrv version!")
+            raise Exception("Invalid uuirtdrv version!")
 
         # if self.info.evalName[-1].isdigit():
         #     self.deviceStr = "USB-UIRT-%s" % self.info.evalName[-1]
         # else:
         #     self.deviceStr = "USB-UIRT"
         self.deviceStr = "USB-UIRT"
-        hDrvHandle = dll.UUIRTOpenEx(self.deviceStr, 0, 0, 0)
+        hDrvHandle = self.dll.UUIRTOpenEx(self.deviceStr, 0, 0, 0)
         if hDrvHandle == INVALID_HANDLE_VALUE:
             err = GetLastError()
             if err == UUIRTDRV_ERR_NO_DLL:
@@ -120,7 +128,7 @@ class USB_UIRT():
         self.hDrvHandle = hDrvHandle
 
         puuInfo = UUINFO()
-        if not dll.UUIRTGetUUIRTInfo(hDrvHandle, byref(puuInfo)):
+        if not self.dll.UUIRTGetUUIRTInfo(hDrvHandle, byref(puuInfo)):
             raise self.Exceptions.DeviceInitFailed
         self.firmwareVersion = "%d.%d" % (
             puuInfo.fwVersion >> 8,
@@ -135,9 +143,8 @@ class USB_UIRT():
             puuInfo.fwDateMonth,
             puuInfo.fwDateDay
         )
-        self.dll = dll
         self.receiveProc = UUCALLBACKPROC(self.ReceiveCallback)
-        res = dll.UUIRTSetRawReceiveCallback(
+        res = self.dll.UUIRTSetRawReceiveCallback(
             self.hDrvHandle,
             self.receiveProc,
             0
@@ -151,47 +158,43 @@ class USB_UIRT():
 
 
     def __stop__(self):
-        eg.Unbind("System.DeviceRemoved", self.OnDeviceRemoved)
-        self.enabled = False
-        dll = self.dll
-        if dll:
-            if not dll.UUIRTClose(self.hDrvHandle):
-                raise self.Exception("Error calling UUIRTClose")
+        if self.dll:
+            if not self.dll.UUIRTClose(self.hDrvHandle):
+                raise Exception("Error calling UUIRTClose")
 
             # fix for USB-UIRT driver bug, See OnComputerSuspend for details.
-            self.hDrvHandle = dll.UUIRTOpenEx(self.deviceStr, 0, 0, 0)
+            self.hDrvHandle = self.dll.UUIRTOpenEx(self.deviceStr, 0, 0, 0)
             # without the UUIRTSetUUIRTConfig call, the driver seems to need
             # much more time to close.
-            self.SetConfig(*self.args)
-            dll.UUIRTSetReceiveCallback(self.hDrvHandle, None, 0)
-            dll.UUIRTClose(self.hDrvHandle)
+            self.dll.UUIRTSetReceiveCallback(self.hDrvHandle, None, 0)
+            self.dll.UUIRTClose(self.hDrvHandle)
             self.dll = None
 
 
+    #this is old code from eventghost
     def OnComputerSuspend(self, suspendType):
         # The USB-UIRT driver seems to have a bug, that prevents the wake-up
         # from standby feature to work, if UUIRTSetRawReceiveCallback was used.
         # To workaround the problem, we re-open the device with
         # UUIRTSetReceiveCallback just before the system goes into standby and
         # later do the reverse once the system comes back from standby.
-        dll = self.dll
-        if dll is None:
+        if self.dll is None:
             return
-        dll.UUIRTClose(self.hDrvHandle)
+        self.dll.UUIRTClose(self.hDrvHandle)
         self.hDrvHandle = dll.UUIRTOpenEx(self.deviceStr, 0, 0, 0)
-        dll.UUIRTSetReceiveCallback(self.hDrvHandle, None, 0)
+        self.dll.UUIRTSetReceiveCallback(self.hDrvHandle, None, 0)
 
 
+    #this is old code from eventghost
     def OnComputerResume(self, suspendType):
-        dll = self.dll
-        if dll is None:
+        if self.dll is None:
             return
-        dll.UUIRTClose(self.hDrvHandle)
+        self.dll.UUIRTClose(self.hDrvHandle)
         self.hDrvHandle = dll.UUIRTOpenEx(self.deviceStr, 0, 0, 0)
-        dll.UUIRTSetRawReceiveCallback(self.hDrvHandle, self.receiveProc, 0)
-        self.SetConfig(*self.args)
+        self.dll.UUIRTSetRawReceiveCallback(self.hDrvHandle, self.receiveProc, 0)
 
 
+    #this is old code from eventghost
     def OnDeviceRemoved(self, event):
         if event.payload[0].split("#")[1] == 'Vid_0403&Pid_f850':
             if self.dll:
@@ -199,12 +202,14 @@ class USB_UIRT():
                     raise self.Exception("Error calling UUIRTClose")
                 self.dll = None
 
+    #this is old code from eventghost
     def OnDeviceAttached(self, event):
         if event.payload[0].split("#")[1] == 'Vid_0403&Pid_f850':
             if self.enabled:
                 self.__start__(*self.args)
 
 
+    #this is old code from eventghost
     def SetConfig(self, ledRX, ledTX, legacyRX, repeatStopCodes=False):
         value = 0
         if ledRX:
@@ -221,18 +226,19 @@ class USB_UIRT():
 
 
     def ReceiveCallback(self, buf, length, userdata):
-        # TODO: find a more efficient way to find the terminator
+        pydevd.settrace(suspend=False, trace_only_current_thread=True)
         data = []
         for i in range(2, 1024):
             value = buf[i]
             data.append(value)
             if value == 255:
+                if self.onReceive:
+                    self.onReceive(data)
                 break
-        self.irDecoder.Decode(data, len(data))
+        # self.irDecoder.Decode(data, len(data))
         return 0
 
     def TransmitIR(self, code='', repeatCount=4, inactivityWaitTime=0):
-        self.dll = self.dll
         if self.dll is None:
             return
         if len(code) > 5:
