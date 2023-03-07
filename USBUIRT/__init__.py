@@ -7,7 +7,6 @@ import datetime
 import threading
 import pydevd
 
-
 INVALID_HANDLE_VALUE = -1
 UINT32 = c_uint
 
