@@ -10,6 +10,7 @@ import pydevd
 INVALID_HANDLE_VALUE = -1
 UINT32 = c_uint
 
+
 class UUINFO(Structure):
     _fields_ = (
         ('fwVersion',   c_uint),
