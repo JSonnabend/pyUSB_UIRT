@@ -45,6 +45,8 @@ LEARNCALLBACKPROC = WINFUNCTYPE(c_int, c_uint, c_uint, c_ulong, c_void_p)
 
 class USB_UIRT():
     receiveCallback = None
+    learnSuccessCallback = None
+    learnProgressCallback = None
 
     @property
     def onReceive(self):
@@ -53,13 +55,27 @@ class USB_UIRT():
     def onReceive(self, callback):
         self.receiveCallback = callback
 
+    @property
+    def onLearnProgress(self):
+        return self.learnProgressCallback
+    @onLearnProgress.setter
+    def onLearnProgress(self, callback):
+        self.learnProgressCallback = callback
+
+    @property
+    def onLearnSuccess(self):
+        return self.learnSuccessCallback
+    @onLearnSuccess.setter
+    def onLearnSuccess(self, callback):
+        self.learnSuccessCallback = callback
+
     def __init__(self):
         self.dll = None
         self.enabled = False
 
 
     def __close__(self):
-        self.irDecoder.Close()
+        self.dll.UUIRTClose(self.hDrvHandle)
 
 
     def __start__(
@@ -86,8 +102,8 @@ class USB_UIRT():
         # else:
         #     self.deviceStr = "USB-UIRT"
         self.deviceStr = "USB-UIRT"
-        hDrvHandle = self.dll.UUIRTOpenEx(self.deviceStr, 0, 0, 0)
-        if hDrvHandle == INVALID_HANDLE_VALUE:
+        self.hDrvHandle = self.dll.UUIRTOpenEx(self.deviceStr, 0, 0, 0)
+        if self.hDrvHandle == INVALID_HANDLE_VALUE:
             err = GetLastError()
             if err == UUIRTDRV_ERR_NO_DLL:
                 raise self.Exceptions.DriverNotFound
@@ -97,10 +113,9 @@ class USB_UIRT():
                 raise self.Exceptions.DeviceInitFailed
             else:
                 raise self.Exceptions.DeviceInitFailed
-        self.hDrvHandle = hDrvHandle
 
         puuInfo = UUINFO()
-        if not self.dll.UUIRTGetUUIRTInfo(hDrvHandle, byref(puuInfo)):
+        if not self.dll.UUIRTGetUUIRTInfo(self.hDrvHandle, byref(puuInfo)):
             raise self.Exceptions.DeviceInitFailed
         self.firmwareVersion = "%d.%d" % (
             puuInfo.fwVersion >> 8,
@@ -125,7 +140,7 @@ class USB_UIRT():
             self.dll = None
             raise self.Exception("Error calling UUIRTSetRawReceiveCallback")
 
-        self.SetConfig(ledRX, ledTX, legacyRX, repeatStopCodes)
+        self._SetConfig(ledRX, ledTX, legacyRX, repeatStopCodes)
         self.enabled = True
 
 
@@ -181,8 +196,7 @@ class USB_UIRT():
                 self.__start__(*self.args)
 
 
-    #this is old code from eventghost
-    def SetConfig(self, ledRX, ledTX, legacyRX, repeatStopCodes=False):
+    def _SetConfig(self, ledRX, ledTX, legacyRX, repeatStopCodes=False):
         value = 0
         if ledRX:
             value |= UUIRTDRV_CFG_LEDRX
@@ -207,7 +221,6 @@ class USB_UIRT():
                 if self.onReceive:
                     self.onReceive(data)
                 break
-        # self.irDecoder.Decode(data, len(data))
         return 0
 
     def TransmitIR(self, code='', repeatCount=4, inactivityWaitTime=0):
@@ -237,18 +250,9 @@ class USB_UIRT():
             0,                  # reserved1
             0                   # reserved2
         ):
-            raise Exceptions("DeviceNotReady")
+            raise Exception("DeviceNotReady")
 
-
-
-
-
-class IRLearnDialog():
-
-    def __init__(self, parent, dll, hDrvHandle, text):
-        self.dll = dll
-        self.hDrvHandle = hDrvHandle
-        self.code = None
+    def IRLearnInit(self):
         self.codeFormat = UUIRTDRV_IRFMT_PRONTO
         self.StartLearnIR()
 
@@ -281,6 +285,7 @@ class IRLearnDialog():
 
 
     def LearnThread(self):
+        pydevd.settrace(suspend=False, trace_only_current_thread=True)
         learnBuffer = create_string_buffer('\000' * 2048)
         self.dll.UUIRTLearnIR(
             self.hDrvHandle,                       # hHandle
@@ -296,30 +301,37 @@ class IRLearnDialog():
         if self.bAbortLearn.value != 1:
             self.OnLearnSuccess(learnBuffer.value)
         self.learnThreadAbortEvent.set()
+        self.AbortLearnThread()
 
 
     def LearnCallback(self, progress, sigQuality, carrierFreq, userData):
-        if progress > 0:
-            self.burstButton.Enable(True)
-        self.progressCtrl.SetValue(progress)
-        self.sigQualityCtrl.SetValue(sigQuality)
-        self.carrierFreqCtrl.SetLabel(
-            "%d.%03d kHz" % (carrierFreq / 1000, carrierFreq % 1000)
-        )
+        pydevd.settrace(suspend=False, trace_only_current_thread=True)
+        # print ("progress: %s\tsigQuality: %s\tcarrierFre-q: %s\tuserData: %s" % (progress,sigQuality,carrierFreq,userData))
+        if self.onLearnProgress:
+            self.onLearnProgress(progress, sigQuality, carrierFreq, userData)
+        # if progress > 0:
+        #     self.burstButton.Enable(True)
+        # self.progressCtrl.SetValue(progress)
+        # self.sigQualityCtrl.SetValue(sigQuality)
+        # self.carrierFreqCtrl.SetLabel(
+        #     "%d.%03d kHz" % (carrierFreq / 1000, carrierFreq % 1000)
+        # )
         return 0
 
 
     def OnLearnSuccess(self, code):
-        self.code = code
-        self.Close()
+        pydevd.settrace(suspend=False, trace_only_current_thread=True)
+        # print('learned code: %s' % code)
+        if self.onLearnSuccess:
+            self.onLearnSuccess(code)
 
 
     def OnRawBox(self, event):
         self.AbortLearnThreadWait()
         self.SetRawMode(self.forceRawCtrl.GetValue())
-        self.burstButton.Enable(False)
-        self.progressCtrl.SetValue(0)
-        self.sigQualityCtrl.SetValue(0)
+        # self.burstButton.Enable(False)
+        # self.progressCtrl.SetValue(0)
+        # self.sigQualityCtrl.SetValue(0)
         self.StartLearnIR()
 
 
@@ -334,4 +346,4 @@ class IRLearnDialog():
 
 
     def OnCancel(self, event):
-        self.Close()
+        self.AbortLearnThread()
