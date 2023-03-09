@@ -45,6 +45,7 @@ LEARNCALLBACKPROC = WINFUNCTYPE(c_int, c_uint, c_uint, c_ulong, c_void_p)
 
 class USB_UIRT():
     receiveCallback = None
+    receiveRawCallback = None
     learnSuccessCallback = None
     learnProgressCallback = None
 
@@ -54,6 +55,12 @@ class USB_UIRT():
     @onReceive.setter
     def onReceive(self, callback):
         self.receiveCallback = callback
+    @property
+    def onReceiveRaw(self):
+        return self.receiveRawCallback
+    @onReceiveRaw.setter
+    def onReceiveRaw(self, callback):
+        self.receiveRawCallback = callback
 
     @property
     def onLearnProgress(self):
@@ -130,8 +137,14 @@ class USB_UIRT():
             puuInfo.fwDateMonth,
             puuInfo.fwDateDay
         )
-        self.receiveProc = UUCALLBACKPROC(self.ReceiveCallback)
+        self.receiveRawProc = UUCALLBACKPROC(self.ReceiveRawCallback)
         res = self.dll.UUIRTSetRawReceiveCallback(
+            self.hDrvHandle,
+            self.receiveRawProc,
+            0
+        )
+        self.receiveProc = UUCALLBACKPROC(self.ReceiveCallback)
+        res = self.dll.UUIRTSetReceiveCallback(
             self.hDrvHandle,
             self.receiveProc,
             0
@@ -223,6 +236,18 @@ class USB_UIRT():
                 break
         return 0
 
+    def ReceiveRawCallback(self, buf, length, userdata):
+        pydevd.settrace(suspend=False, trace_only_current_thread=True)
+        data = []
+        for i in range(2, 1024):
+            value = buf[i]
+            data.append(value)
+            if value == 255:
+                if self.onReceiveRaw:
+                    self.onReceiveRaw(data)
+                break
+        return 0
+
     def TransmitIR(self, code='', repeatCount=4, inactivityWaitTime=0):
         if self.dll is None:
             return
@@ -254,8 +279,6 @@ class USB_UIRT():
 
     def IRLearnInit(self):
         self.codeFormat = UUIRTDRV_IRFMT_PRONTO
-        self.StartLearnIR()
-
 
     def SetRawMode(self, flag=True):
         if flag:
